@@ -26,15 +26,97 @@ class Colors():
     MAGENTA = '\u001b[35m'
 
 
-load_dotenv()
+
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 openai.api_key = os.getenv("OPENAI_KEY")
 bot = commands.Bot(command_prefix='!', intents=intents)
 teams = teams.get_teams()
+load_dotenv()
 
 
+def get_predictions(home, away):
+    forest_model = joblib.load('models/forest_reg_model.pkl')
+    lin_model = joblib.load('models/lin_reg_model.pkl')
+    tree_model = joblib.load('models/tree_reg_model.pkl')
+    grid_model = joblib.load('models/grid_search_model.pkl')
+    ridge_model = joblib.load('models/ridge_reg_model.pkl')
+
+    # Get user input
+    recent_games = 10 #input('How many recent games? ')
+    # [HOME, AWAY]
+    match_list = [[home,away]]
+
+
+    for match in match_list:
+        home = match[0]
+        away = match[1]
+        home_info = [x for x in teams if x['abbreviation'] == home][0]
+        away_info = [x for x in teams if x['abbreviation'] == away][0]
+        
+        # Get Team data
+        home_log = leaguegamefinder.LeagueGameFinder(team_id_nullable=home_info['id']).get_data_frames()[0]
+        away_log = leaguegamefinder.LeagueGameFinder(team_id_nullable=away_info['id']).get_data_frames()[0]
+        home_log = home_log.head(int(recent_games))
+        away_log = away_log.head(int(recent_games))
+        prediction_list = []
+
+        # Use this for direct input
+        #home_fg_pct = input('HOME FG%: ')
+        #away_fg_pct = input('AWAY FG%: ')
+        #home_feature_list = [1, round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FTA'].mean()), round(away_log['PF'].mean()), round(away_log['REB'].mean()),round(away_log['DREB'].mean()),round(away_log['STL'].mean()),round(away_log['BLK'].mean()),round(home_log['AST'].mean()), home_fg_pct, round(home_log['TOV'].mean()), round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FG3_PCT'].mean(),3)]
+        #away_feature_list = [0, round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FTA'].mean()), round(home_log['PF'].mean()), round(home_log['REB'].mean()),round(home_log['DREB'].mean()),round(home_log['STL'].mean()),round(home_log['BLK'].mean()),round(away_log['AST'].mean()), away_fg_pct, round(away_log['TOV'].mean()), round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FG3_PCT'].mean(),3)]
+
+        # Use this for auto-retrieve
+        home_feature_list = [1, round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FTA'].mean()), round(away_log['PF'].mean()), round(away_log['REB'].mean()),round(away_log['DREB'].mean()),round(away_log['STL'].mean()),round(away_log['BLK'].mean()),round(home_log['AST'].mean()),round(home_log['FG_PCT'].mean(), 3), round(home_log['TOV'].mean()), round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FG3_PCT'].mean(),3), round(home_log['REB'].mean())]
+        away_feature_list = [0, round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FTA'].mean()), round(home_log['PF'].mean()), round(home_log['REB'].mean()),round(home_log['DREB'].mean()),round(home_log['STL'].mean()),round(home_log['BLK'].mean()),round(away_log['AST'].mean()),round(away_log['FG_PCT'].mean(), 3), round(away_log['TOV'].mean()), round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FG3_PCT'].mean(),3), round(away_log['REB'].mean())]
+        prediction_list.append(home_feature_list)
+        prediction_list.append(away_feature_list)
+
+
+        # Put features into dataframe
+        features = pd.DataFrame(prediction_list, columns=['HOME_AWAY','FGA_AGST', 'FG3A_AGST', 'FTA_AGST', 'PF_AGST', 'REB_AGST', 'DREB_AGST', 'STL_AGST', 'BLK_AGST', 'AST_FOR','FG_PCT_FOR', 'TOV_FOR', 'FGA_FOR', 'FG3A_FOR','FG3_PCT_FOR', 'REB_FOR'])
+        features = features.drop(['FG3A_AGST','REB_AGST','FTA_AGST','FGA_AGST'], axis=1)
+
+        # Transform Pipeline
+        imputer = SimpleImputer(strategy='median')
+        # Since median can only be computed on #'s we copy data with text categories
+        stats_num = features.drop('HOME_AWAY', axis=1)
+        imputer.fit(stats_num)
+        # Use imputer on dataset to replace missing values with learned medians
+        X = imputer.transform(stats_num)
+        # Put the data back into a dataframe
+        stats_tr = pd.DataFrame(X, columns=stats_num.columns, index=stats_num.index)
+        num_pipeline = Pipeline([('imputer', SimpleImputer(strategy='median')), ('std_scaler', StandardScaler())])
+        stats_num_tr = num_pipeline.fit_transform(stats_num)
+        num_attribs = list(stats_num)
+        cat_attribs = ['HOME_AWAY']
+        full_pipeline = ColumnTransformer([('num', num_pipeline, num_attribs), ('cat', OneHotEncoder(), cat_attribs)])
+        # Final prepared data
+        stats_prepared = full_pipeline.fit_transform(features)
+
+        # Make predictions based on features
+        trans = PolynomialFeatures(degree=3)
+        trans_x = trans.fit_transform(stats_prepared)
+        scores = forest_model.predict(stats_prepared)
+        scores2 = lin_model.predict(trans_x)
+        scores3 = tree_model.predict(stats_prepared)
+        scores4 = grid_model.predict(stats_prepared)
+        scores5 = ridge_model.predict(stats_prepared)
+        ens_avg_home = round((scores[0] + scores2[0] + scores3[0] + scores4[0] + scores5[0]) / 5)
+        ens_avg_away = round((scores[1] + scores2[1] + scores3[1] + scores4[1] + scores5[1]) / 5)
+
+        str0 = 'HOME -> %s | AWAY -> %s' % (home, away)
+        str1 = '\nForest Predictions: ' + '%s %d %s %d' % (home, scores[0], away, scores[1]) + ' Total: %d ' % round(scores[0] + scores[1],2)
+        str2 = '\nLinear Predictions: ' + '%s %d %s %d' % (home, scores2[0], away, scores2[1]) + ' Total: %d ' % round(scores2[0] + scores2[1],2)
+        str3 = '\nDecision Tree Predictions: ' + '%s %d %s %d' % (home, scores3[0], away, scores3[1]) + ' Total: %d ' % round(scores3[0] + scores3[1],2)
+        str4 = '\nGrid Predictions: ' + '%s %d %s %d' % (home, scores4[0], away, scores4[1]) + ' Total: %d ' % round(scores4[0] + scores4[1],2)
+        str5 = '\nRidge Predictions: ' + '%s %d %s %d' % (home, scores5[0], away, scores5[1]) + ' Total: %d ' % round(scores5[0] + scores5[1],2)
+        str6 = '\nAverage: ' + '%s %d %s %d' % (home, ens_avg_home, away, ens_avg_away) + ' Total: %d ' % round(ens_avg_home + ens_avg_away,2)
+        final_output = '```' + str0 + str1 + str2 + str3 + str4 + str5 + str6 + '```'
+        return(final_output)
 
 
 # EVENTS
@@ -118,86 +200,8 @@ async def NBA(ctx):
 
 @bot.command()
 async def predict(ctx, arg1, arg2):
-    # Load models
-    forest_model = joblib.load('models/forest_reg_model.pkl')
-    lin_model = joblib.load('models/lin_reg_model.pkl')
-    tree_model = joblib.load('models/tree_reg_model.pkl')
-    grid_model = joblib.load('models/grid_search_model.pkl')
-    ridge_model = joblib.load('models/ridge_reg_model.pkl')
-
-    # Get user input
-    recent_games = 10 #input('How many recent games? ')
-    # [HOME, AWAY]
-    match_list = [[arg1,arg2]]
-
-
-    for match in match_list:
-        home = match[0]
-        away = match[1]
-        home_info = [x for x in teams if x['abbreviation'] == home][0]
-        away_info = [x for x in teams if x['abbreviation'] == away][0]
-        
-        # Get Team data
-        home_log = leaguegamefinder.LeagueGameFinder(team_id_nullable=home_info['id']).get_data_frames()[0]
-        away_log = leaguegamefinder.LeagueGameFinder(team_id_nullable=away_info['id']).get_data_frames()[0]
-        home_log = home_log.head(int(recent_games))
-        away_log = away_log.head(int(recent_games))
-        prediction_list = []
-
-        # Use this for direct input
-        #home_fg_pct = input('HOME FG%: ')
-        #away_fg_pct = input('AWAY FG%: ')
-        #home_feature_list = [1, round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FTA'].mean()), round(away_log['PF'].mean()), round(away_log['REB'].mean()),round(away_log['DREB'].mean()),round(away_log['STL'].mean()),round(away_log['BLK'].mean()),round(home_log['AST'].mean()), home_fg_pct, round(home_log['TOV'].mean()), round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FG3_PCT'].mean(),3)]
-        #away_feature_list = [0, round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FTA'].mean()), round(home_log['PF'].mean()), round(home_log['REB'].mean()),round(home_log['DREB'].mean()),round(home_log['STL'].mean()),round(home_log['BLK'].mean()),round(away_log['AST'].mean()), away_fg_pct, round(away_log['TOV'].mean()), round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FG3_PCT'].mean(),3)]
-
-        # Use this for auto-retrieve
-        home_feature_list = [1, round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FTA'].mean()), round(away_log['PF'].mean()), round(away_log['REB'].mean()),round(away_log['DREB'].mean()),round(away_log['STL'].mean()),round(away_log['BLK'].mean()),round(home_log['AST'].mean()),round(home_log['FG_PCT'].mean(), 3), round(home_log['TOV'].mean()), round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FG3_PCT'].mean(),3), round(home_log['REB'].mean())]
-        away_feature_list = [0, round(home_log['FGA'].mean()), round(home_log['FG3A'].mean()), round(home_log['FTA'].mean()), round(home_log['PF'].mean()), round(home_log['REB'].mean()),round(home_log['DREB'].mean()),round(home_log['STL'].mean()),round(home_log['BLK'].mean()),round(away_log['AST'].mean()),round(away_log['FG_PCT'].mean(), 3), round(away_log['TOV'].mean()), round(away_log['FGA'].mean()), round(away_log['FG3A'].mean()), round(away_log['FG3_PCT'].mean(),3), round(away_log['REB'].mean())]
-        prediction_list.append(home_feature_list)
-        prediction_list.append(away_feature_list)
-
-
-        # Put features into dataframe
-        features = pd.DataFrame(prediction_list, columns=['HOME_AWAY','FGA_AGST', 'FG3A_AGST', 'FTA_AGST', 'PF_AGST', 'REB_AGST', 'DREB_AGST', 'STL_AGST', 'BLK_AGST', 'AST_FOR','FG_PCT_FOR', 'TOV_FOR', 'FGA_FOR', 'FG3A_FOR','FG3_PCT_FOR', 'REB_FOR'])
-        features = features.drop(['FG3A_AGST','REB_AGST','FTA_AGST','FGA_AGST'], axis=1)
-
-        # Transform Pipeline
-        imputer = SimpleImputer(strategy='median')
-        # Since median can only be computed on #'s we copy data with text categories
-        stats_num = features.drop('HOME_AWAY', axis=1)
-        imputer.fit(stats_num)
-        # Use imputer on dataset to replace missing values with learned medians
-        X = imputer.transform(stats_num)
-        # Put the data back into a dataframe
-        stats_tr = pd.DataFrame(X, columns=stats_num.columns, index=stats_num.index)
-        num_pipeline = Pipeline([('imputer', SimpleImputer(strategy='median')), ('std_scaler', StandardScaler())])
-        stats_num_tr = num_pipeline.fit_transform(stats_num)
-        num_attribs = list(stats_num)
-        cat_attribs = ['HOME_AWAY']
-        full_pipeline = ColumnTransformer([('num', num_pipeline, num_attribs), ('cat', OneHotEncoder(), cat_attribs)])
-        # Final prepared data
-        stats_prepared = full_pipeline.fit_transform(features)
-
-        # Make predictions based on features
-        trans = PolynomialFeatures(degree=3)
-        trans_x = trans.fit_transform(stats_prepared)
-        scores = forest_model.predict(stats_prepared)
-        scores2 = lin_model.predict(trans_x)
-        scores3 = tree_model.predict(stats_prepared)
-        scores4 = grid_model.predict(stats_prepared)
-        scores5 = ridge_model.predict(stats_prepared)
-        ens_avg_home = round((scores[0] + scores2[0] + scores3[0] + scores4[0] + scores5[0]) / 5)
-        ens_avg_away = round((scores[1] + scores2[1] + scores3[1] + scores4[1] + scores5[1]) / 5)
-
-        str0 = 'HOME -> %s | AWAY -> %s' % (home, away)
-        str1 = '\nForest Predictions: ' + '%s %d %s %d' % (home, scores[0], away, scores[1]) + ' Total: %d ' % round(scores[0] + scores[1],2)
-        str2 = '\nLinear Predictions: ' + '%s %d %s %d' % (home, scores2[0], away, scores2[1]) + ' Total: %d ' % round(scores2[0] + scores2[1],2)
-        str3 = '\nDecision Tree Predictions: ' + '%s %d %s %d' % (home, scores3[0], away, scores3[1]) + ' Total: %d ' % round(scores3[0] + scores3[1],2)
-        str4 = '\nGrid Predictions: ' + '%s %d %s %d' % (home, scores4[0], away, scores4[1]) + ' Total: %d ' % round(scores4[0] + scores4[1],2)
-        str5 = '\nRidge Predictions: ' + '%s %d %s %d' % (home, scores5[0], away, scores5[1]) + ' Total: %d ' % round(scores5[0] + scores5[1],2)
-        str6 = '\nAverage: ' + '%s %d %s %d' % (home, ens_avg_home, away, ens_avg_away) + ' Total: %d ' % round(ens_avg_home + ens_avg_away,2)
-        final_output = '```' + str0 + str1 + str2 + str3 + str4 + str5 + str6 + '```'
-        await ctx.send(final_output)
+        predictions = get_predictions(arg1, arg2)
+        await ctx.send(predictions)
       
 
 bot.run(os.getenv("DISCORD_KEY"))
