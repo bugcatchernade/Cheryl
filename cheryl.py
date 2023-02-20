@@ -26,10 +26,11 @@ class Colors():
     MAGENTA = '\u001b[35m'
 
 
+load_dotenv()
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-openai.api_key = load_dotenv("OPENAI_KEY")
+openai.api_key = os.getenv("OPENAI_KEY")
 bot = commands.Bot(command_prefix='!', intents=intents)
 teams = teams.get_teams()
 
@@ -199,4 +200,4 @@ async def predict(ctx, arg1, arg2):
         await ctx.send(final_output)
       
 
-bot.run(load_dotenv("DISCORD_KEY"))
+bot.run(os.getenv("DISCORD_KEY"))
