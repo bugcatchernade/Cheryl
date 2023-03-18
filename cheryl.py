@@ -19,13 +19,13 @@ class Colors():
 
 
 
+
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 openai.api_key = os.getenv("OPENAI_KEY")
 bot = commands.Bot(command_prefix='!', intents=intents)
 load_dotenv()
-
 
 
 # EVENTS
@@ -36,25 +36,24 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.content > 15:
-        
-        rand_int = random.randint(1,10)
+   
+    rand_int = random.randint(1,10)
 
-        if message.author.name == 'Da Viper Lgnd' and rand_int == 7:
+    if message.author.name == 'Da Viper Lgnd' and rand_int == 7:
 
-            result = openai.Completion.create( model="text-davinci-003", max_tokens=4000, prompt=message.content, temperature=0.9)
+        result = openai.Completion.create( model="text-davinci-003", max_tokens=4000, prompt=message.content, temperature=0.9)
 
-            await message.channel.send(result["choices"][0]["text"])
+        await message.channel.send(result["choices"][0]["text"])
 
 
-        if message.author.name == 'Ape' and rand_int == 5:
+    if message.author.name == 'Ape' and rand_int == 5:
 
-            result = openai.Completion.create(model="text-davinci-003", max_tokens=4000, prompt=message.content, temperature=0.9)
-            await message.channel.send(result["choices"][0]["text"])
+        result = openai.Completion.create(model="text-davinci-003", max_tokens=4000, prompt=message.content, temperature=0.9)
+        await message.channel.send(result["choices"][0]["text"])
 
-        await bot.process_commands(message)
-    else:
-        return
+    await bot.process_commands(message)
+else:
+    return
 
 
 
