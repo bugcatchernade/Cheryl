@@ -1,2 +1,0 @@
-# Cheryl
- Discord Bot
